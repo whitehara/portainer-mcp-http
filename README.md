@@ -1,8 +1,9 @@
 # portainer-mcp-http
 
-Expose [portainer-mcp](https://github.com/portainer/portainer-mcp) as an MCP server via
-[mcp-proxy](https://github.com/sparfenyuk/mcp-proxy), routed through an existing Traefik reverse
-proxy and protected by Cloudflare Zero Trust Access.
+OAuth-protected remote MCP server that wraps [portainer-mcp](https://github.com/portainer/portainer-mcp)
+with [mcp-auth-proxy](https://github.com/sigbit/mcp-auth-proxy), using **Cloudflare Access for SaaS**
+as the OIDC identity provider. Traffic flows through an existing Traefik reverse proxy and
+Cloudflare Tunnel.
 
 ## Architecture
 
@@ -11,130 +12,83 @@ Claude.ai / Claude Code
     │  mcp-remote (npx)
     ▼
 Cloudflare MCP Portal  (https://mcp-portal.your-domain.com/mcp)
-    │  Cloudflare Zero Trust Access (IdP authentication)
+    │  OAuth 2.1 bearer token issued by mcp-auth-proxy
     ▼
-Cloudflare Tunnel (existing cloudflared container)
-    │
+Cloudflare Tunnel  →  Traefik
+    │  Host-based routing (HTTP)
     ▼
-Traefik (existing, HTTP)
-    │  Host-based routing
-    ▼
-portainer-mcp-http container  (mcp-proxy + portainer-mcp, port 8080)
-    │  REST API
-    ▼
-Portainer CE → Docker Swarm
+┌─────────────────────────────────────────────────┐
+│ portainer-mcp-http container (port 80)          │
+│                                                  │
+│   mcp-auth-proxy  (OAuth server + OIDC client)  │
+│        │  stdio                                  │
+│        ▼                                         │
+│   portainer-mcp                                  │
+└──────────────┬──────────────────────────────────┘
+               │  REST API
+               ▼
+         Portainer CE → Docker Swarm
+
+          ▲
+          │ OIDC (user login)
+          │
+Cloudflare Access for SaaS
+ (vx-xv.cloudflareaccess.com/.../oidc/<CLIENT_ID>)
 ```
+
+mcp-auth-proxy acts as both:
+- **OAuth 2.1 authorization server** for the Cloudflare MCP Portal (exposes
+  `/.well-known/oauth-authorization-server` so the Portal can discover and authenticate)
+- **OIDC client** that delegates user identity to Cloudflare Access for SaaS
+
+This means the origin (`portainer-mcp.your-domain.com`) does not need a Cloudflare Access
+self-hosted application — authentication is enforced by mcp-auth-proxy itself.
 
 ## Prerequisites
 
-- An existing Cloudflare Tunnel with a `cloudflared` container running and connected to a Traefik
-  Docker network
-- An existing Traefik container configured with the Docker provider
-- A Cloudflare account with Zero Trust Access enabled
+- An existing Cloudflare Tunnel connected to your Traefik Docker network
+- An existing Traefik container with the Docker provider
+- A Cloudflare Zero Trust account
 - Docker Compose v2
 
-## CI/CD — GitHub Actions
+## Quick start
 
-The included workflow (`.github/workflows/build.yml`) builds a multi-arch image
-(`linux/amd64` + `linux/arm64`) and pushes it to GHCR on every push to `main` and on version
-tags (`v*.*.*`). Pull requests trigger a build-only run (no push).
+### 1. Create the Cloudflare Access SaaS (OIDC) app
 
-### Image tags
+1. Zero Trust → **Access** → **Applications** → **Add an application** → **SaaS**
+2. Authentication protocol: **OIDC**
+3. Application name: e.g. `Portainer MCP`
+4. Redirect URL: `https://<PORTAINER_MCP_HOSTNAME>/.auth/oidc/callback`
+5. Scopes: `openid`, `email`, `profile`
+6. Add an Access **Policy** that allows your identity (email / group)
+7. Save and copy:
+   - **Client ID** → `OIDC_CLIENT_ID`
+   - **Client secret** → `OIDC_CLIENT_SECRET`
+   - **OIDC discovery URL** → `OIDC_CONFIGURATION_URL`
+     (format: `https://<TEAM>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<CLIENT_ID>/.well-known/openid-configuration`)
 
-| Event | Tags produced |
+### 2. Configure the Tunnel public hostname
+
+Zero Trust → **Networks** → **Tunnels** → your tunnel → **Public Hostnames** → **Add**:
+
+| Field | Value |
 |---|---|
-| Push to `main` | `latest`, `main`, `sha-<short>` |
-| Push tag `v1.2.3` | `1.2.3`, `1.2`, `sha-<short>` |
-| Pull request | build only, no push |
+| Subdomain / Domain | matches `PORTAINER_MCP_HOSTNAME` |
+| Service Type | `HTTP` |
+| URL | `traefik:80` (Traefik container name and port) |
 
-### Bundling a specific portainer-mcp version
-
-Trigger **workflow_dispatch** from the Actions tab and set
-`portainer_mcp_version` (e.g. `v0.8.0`). Leave blank to use the Dockerfile default.
-
-### Making the image public
-
-By default GHCR packages are private. To allow `docker compose pull` without credentials:
-
-1. GitHub → `whitehara/portainer-mcp-http` → **Packages** → select the package
-2. **Package settings** → **Change visibility** → Public
-
-## Directory Structure
-
-```
-portainer-mcp-http/
-├── .github/
-│   └── workflows/
-│       └── build.yml         # GHCR build & push
-├── docker-compose.yml
-├── .env                      # secrets — never commit
-├── .env.example
-├── .gitignore
-└── portainer-mcp-http/
-    └── Dockerfile
-```
-
-## Setup
-
-### 1. Prepare environment variables
+### 3. Configure environment and start
 
 ```bash
 cp .env.example .env
-$EDITOR .env   # fill in all values
+$EDITOR .env   # fill in PORTAINER_*, TRAEFIK_*, OIDC_*, PORTAINER_MCP_HOSTNAME
+
+docker compose pull
+docker compose up -d
+docker compose logs -f portainer-mcp-http
 ```
 
-| Variable | Description |
-|---|---|
-| `PORTAINER_HOST` | Portainer hostname or IP |
-| `PORTAINER_PORT` | Portainer HTTPS port (default: `9443`) |
-| `PORTAINER_TOKEN` | Portainer API token (`ptr_...`) |
-| `TRAEFIK_NETWORK` | Name of the existing external Docker network shared with Traefik |
-| `TRAEFIK_ENTRYPOINT` | Traefik entrypoint name for HTTP traffic (default: `http`) |
-| `PORTAINER_MCP_HOSTNAME` | Public hostname Traefik will route to this service |
-| `IMAGE_TAG` | Image tag to deploy (default: `latest`) |
-| `PORTAINER_MCP_VERSION` | *(local build only)* portainer-mcp release version |
-| `TARGETARCH` | *(local build only)* binary architecture: `amd64` or `arm64` |
-
-> **Tip:** Use a non-guessable subdomain for `PORTAINER_MCP_HOSTNAME`
-> (e.g. `mcp-origin-a7f2k3.your-domain.com`) to minimise exposure during the Cloudflare
-> Access setup window.
-
-### 2. Configure Cloudflare Zero Trust Access
-
-> **⚠️ CRITICAL ORDER OF OPERATIONS**
->
-> Create the Cloudflare Zero Trust Access application **before** adding the Public Hostname
-> to your Tunnel. A Public Hostname creates a live DNS record immediately — if Access is not
-> already in place, the endpoint is publicly reachable without authentication until you add it.
->
-> Order:
-> 1. Create the Access application (step below) — DNS does not exist yet, that is fine
-> 2. Add the Public Hostname to the Tunnel
-> 3. Start the portainer-mcp-http container
-
-#### 2a. Create the Access application
-
-1. [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → **Access** → **Applications**
-   → **Add an application** → **Self-hosted**
-2. Set **Application domain** to your `PORTAINER_MCP_HOSTNAME` value
-3. Add a **Policy** that allows only your identity (e.g. your email address)
-4. Configure your preferred **Login method** (Google, GitHub, etc.)
-5. Save
-
-#### 2b. Add the Public Hostname to your Tunnel
-
-1. Zero Trust → **Networks** → **Tunnels** → select your existing tunnel
-2. **Public Hostnames** → **Add a public hostname**
-
-   | Field | Value |
-   |---|---|
-   | Subdomain / Domain | matches `PORTAINER_MCP_HOSTNAME` |
-   | Service Type | `HTTP` |
-   | URL | `traefik:80` (or the container name / port of your Traefik instance) |
-
-3. Save — Cloudflare will create the DNS CNAME automatically
-
-#### 2c. Register as an MCP Server
+### 4. Register the MCP server in Cloudflare AI controls
 
 1. Zero Trust → **Access controls** → **AI controls** → **MCP servers** → **Add an MCP server**
 
@@ -143,40 +97,22 @@ $EDITOR .env   # fill in all values
    | Name | `Portainer MCP` |
    | HTTP URL | `https://<PORTAINER_MCP_HOSTNAME>/mcp` |
 
-2. Set **Access policies** to match the application created in step 2a
-3. **Save and connect server** — wait for status to show **Ready**
+2. Click **Save and connect server** → **Authenticate server**
+3. Complete the OAuth popup (authenticates through Cloudflare Access)
+4. Status becomes **Ready**
 
-#### 2d. Create an MCP Server Portal (optional but recommended)
+### 5. Add to an MCP Portal (optional but recommended)
 
-1. **Add MCP server portal**
+Zero Trust → **AI controls** → **Add MCP server portal**
 
-   | Field | Value |
-   |---|---|
-   | Portal name | `My MCP Portal` |
-   | Custom domain | `mcp-portal.your-domain.com` |
+| Field | Value |
+|---|---|
+| Portal name | `My MCP Portal` |
+| Custom domain | `mcp-portal.your-domain.com` |
 
-2. Add the Portainer MCP server to the portal
+Add the Portainer MCP server to the portal.
 
-### 3. Pull and start
-
-```bash
-# Pull the pre-built image from GHCR
-docker compose pull
-
-# Start
-docker compose up -d
-
-# Verify logs
-docker compose logs -f portainer-mcp-http
-```
-
-> **Local build fallback:** If you want to build locally instead of pulling from GHCR,
-> comment out the `image:` line in `docker-compose.yml` and uncomment the `build:` block,
-> then run `docker compose build` before `docker compose up -d`.
-
-### 4. Configure the client
-
-#### Claude Code (`.mcp.json`)
+### 6. Configure the client (`.mcp.json`)
 
 ```json
 {
@@ -193,24 +129,43 @@ docker compose logs -f portainer-mcp-http
 }
 ```
 
-First launch will open a browser for IdP authentication. The token is cached in `~/.mcp-auth/`
-and reused until the session expires.
+First launch opens a browser window for Cloudflare Access login. Tokens are cached in
+`~/.mcp-auth/`. Reset with `rm -rf ~/.mcp-auth`.
 
-To reset cached credentials:
+## Environment variables
 
-```bash
-rm -rf ~/.mcp-auth
-```
+| Variable | Description |
+|---|---|
+| `PORTAINER_HOST` | Portainer hostname or IP |
+| `PORTAINER_PORT` | Portainer HTTPS port (default: `9443`) |
+| `PORTAINER_TOKEN` | Portainer API token (`ptr_...`) |
+| `TRAEFIK_NETWORK` | Existing external Docker network shared with Traefik |
+| `TRAEFIK_ENTRYPOINT` | Traefik entrypoint name (default: `http`) |
+| `PORTAINER_MCP_HOSTNAME` | Public hostname routed by Traefik |
+| `OIDC_CLIENT_ID` | OIDC client ID from the Cloudflare SaaS app |
+| `OIDC_CLIENT_SECRET` | OIDC client secret |
+| `OIDC_CONFIGURATION_URL` | OIDC discovery URL from Cloudflare |
+| `OIDC_ALLOWED_USERS_GLOB` | Optional glob allowlist (e.g. `*@example.com`) |
+| `IMAGE_TAG` | Image tag to deploy (default: `latest`) |
+| `PORTAINER_MCP_VERSION` | *(local build only)* portainer-mcp release version |
+| `TARGETARCH` | *(local build only)* `amd64` or `arm64` |
+
+## CI/CD
+
+GitHub Actions (`.github/workflows/build.yml`) builds a multi-arch image
+(`linux/amd64` + `linux/arm64`) and pushes to GHCR on push to `main` and on `v*.*.*` tags.
+
+| Event | Tags |
+|---|---|
+| Push to `main` | `latest`, `main`, `sha-<short>` |
+| Push tag `v1.2.3` | `1.2.3`, `1.2`, `sha-<short>` |
+| Pull request | build only |
+
+The GHCR package starts as private. Make it public via
+`GitHub → package settings → Change visibility → Public` to allow `docker compose pull`
+without credentials.
 
 ## Upgrade
-
-### Via GitHub Actions (recommended)
-
-1. Trigger **workflow_dispatch** from the Actions tab with the new `portainer_mcp_version`
-   (e.g. `v0.8.0`) — or update the `ARG PORTAINER_MCP_VERSION` default in the Dockerfile and
-   push to `main`
-2. Wait for the build to complete and the new image to appear in GHCR
-3. On the host, pull and restart:
 
 ```bash
 docker compose pull portainer-mcp-http
@@ -218,55 +173,12 @@ docker compose up -d portainer-mcp-http
 docker compose logs -f portainer-mcp-http
 ```
 
-### Local build
+## Local build
+
+If you need to build locally (for example to bundle a custom `portainer-mcp` version),
+comment out `image:` in `docker-compose.yml` and uncomment the `build:` block, then:
 
 ```bash
-# 1. Switch docker-compose.yml to build: mode (comment out image:, uncomment build:)
-# 2. Update PORTAINER_MCP_VERSION in .env
-
-# 3. Rebuild (md5 verification runs automatically)
 docker compose build --no-cache portainer-mcp-http
-
-# 4. Restart
 docker compose up -d portainer-mcp-http
-docker compose logs -f portainer-mcp-http
 ```
-
-## Troubleshooting
-
-### md5 checksum mismatch
-
-```
-ERROR: md5sum mismatch. Aborting.
-```
-
-Re-run with `--no-cache`. If the error persists, verify the release files on the
-[portainer-mcp releases page](https://github.com/portainer/portainer-mcp/releases).
-
-### Version mismatch warning
-
-```
-error: portainer version mismatch
-```
-
-`-disable-version-check` is already included in `docker-compose.yml`. If you see this after
-a Portainer upgrade, consider updating `PORTAINER_MCP_VERSION` to match.
-
-### Traefik not routing to the container
-
-- Confirm the container has joined the correct external network: `docker network inspect <TRAEFIK_NETWORK>`
-- Confirm Traefik has the Docker provider enabled and is watching the same network
-- Check Traefik logs: `docker logs <traefik-container>`
-
-### Cloudflare Tunnel not forwarding
-
-```bash
-docker logs cloudflared-mcp
-```
-
-Verify the Public Hostname service URL points to Traefik (not directly to `portainer-mcp-http`).
-
-### MCP Server Portal status shows Error
-
-Zero Trust → **AI controls** → **MCP servers** → select server → **Authenticate server** to
-re-trigger authentication.

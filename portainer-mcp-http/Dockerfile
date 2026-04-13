@@ -26,22 +26,13 @@ RUN tar -xzf portainer-mcp.tar.gz \
  && chmod +x portainer-mcp
 
 # -----------------------------------------------
-# Stage 2: Runtime image using mcp-proxy
+# Stage 2: Runtime image based on mcp-auth-proxy
 # -----------------------------------------------
-FROM ghcr.io/sparfenyuk/mcp-proxy:latest
-
-# portainer-mcp is a glibc-linked binary; Alpine uses musl, so install gcompat
-RUN apk add --no-cache gcompat
+FROM ghcr.io/sigbit/mcp-auth-proxy:latest
 
 COPY --from=downloader /tmp/portainer-mcp /usr/local/bin/portainer-mcp
 
-RUN mkdir -p /etc/portainer-mcp
+RUN mkdir -p /etc/portainer-mcp /data
 
-# Actual -server, -token, and other args are overridden via command: in docker-compose.yml
-ENTRYPOINT ["mcp-proxy"]
-CMD ["--host=0.0.0.0", "--port=8080", \
-     "--", \
-     "/usr/local/bin/portainer-mcp", \
-     "-server", "placeholder", \
-     "-token",  "placeholder", \
-     "-tools",  "/etc/portainer-mcp/tools.yaml"]
+# All CLI args (OIDC config, --, portainer-mcp args) are passed via command: in docker-compose.yml
+# mcp-auth-proxy's default ENTRYPOINT is used as-is.

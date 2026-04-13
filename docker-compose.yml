@@ -11,8 +11,16 @@ services:
     container_name: portainer-mcp-http
     restart: unless-stopped
     command:
-      - "--host=0.0.0.0"
-      - "--port=8080"
+      - "--external-url=https://${PORTAINER_MCP_HOSTNAME}"
+      - "--no-auto-tls"
+      - "--listen=:80"
+      - "--trusted-proxies=0.0.0.0/0"
+      - "--data-path=/data"
+      - "--oidc-client-id=${OIDC_CLIENT_ID}"
+      - "--oidc-client-secret=${OIDC_CLIENT_SECRET}"
+      - "--oidc-configuration-url=${OIDC_CONFIGURATION_URL}"
+      - "--oidc-provider-name=Cloudflare Access"
+      - "--oidc-allowed-users-glob=${OIDC_ALLOWED_USERS_GLOB:-}"
       - "--"
       - "/usr/local/bin/portainer-mcp"
       - "-server"
@@ -24,6 +32,7 @@ services:
       - "-disable-version-check"
     volumes:
       - portainer-mcp-http-tools:/etc/portainer-mcp
+      - portainer-mcp-http-data:/data
     networks:
       - traefik-net
     labels:
@@ -31,10 +40,11 @@ services:
       - "traefik.docker.network=${TRAEFIK_NETWORK}"
       - "traefik.http.routers.portainer-mcp-http.rule=Host(`${PORTAINER_MCP_HOSTNAME}`)"
       - "traefik.http.routers.portainer-mcp-http.entrypoints=${TRAEFIK_ENTRYPOINT:-http}"
-      - "traefik.http.services.portainer-mcp-http.loadbalancer.server.port=8080"
+      - "traefik.http.services.portainer-mcp-http.loadbalancer.server.port=80"
 
 volumes:
   portainer-mcp-http-tools:
+  portainer-mcp-http-data:
 
 networks:
   traefik-net:
