@@ -30,6 +30,9 @@ RUN tar -xzf portainer-mcp.tar.gz \
 # -----------------------------------------------
 FROM ghcr.io/sparfenyuk/mcp-proxy:latest
 
+# portainer-mcp is a glibc-linked binary; Alpine uses musl, so install gcompat
+RUN apk add --no-cache gcompat
+
 COPY --from=downloader /tmp/portainer-mcp /usr/local/bin/portainer-mcp
 
 RUN mkdir -p /etc/portainer-mcp
