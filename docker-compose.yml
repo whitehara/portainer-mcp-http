@@ -1,0 +1,42 @@
+services:
+
+  portainer-mcp-http:
+    image: ghcr.io/whitehara/portainer-mcp-http:${IMAGE_TAG:-latest}
+    # For local builds, comment out image: above and uncomment build: below
+    # build:
+    #   context: ./portainer-mcp-http
+    #   args:
+    #     PORTAINER_MCP_VERSION: ${PORTAINER_MCP_VERSION:-v0.7.0}
+    #     TARGETARCH: ${TARGETARCH:-amd64}
+    container_name: portainer-mcp-http
+    restart: unless-stopped
+    command:
+      - "--host=0.0.0.0"
+      - "--port=8080"
+      - "--"
+      - "/usr/local/bin/portainer-mcp"
+      - "-server"
+      - "${PORTAINER_HOST}:${PORTAINER_PORT:-9443}"
+      - "-token"
+      - "${PORTAINER_TOKEN}"
+      - "-tools"
+      - "/etc/portainer-mcp/tools.yaml"
+      - "-disable-version-check"
+    volumes:
+      - portainer-mcp-http-tools:/etc/portainer-mcp
+    networks:
+      - traefik-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK}"
+      - "traefik.http.routers.portainer-mcp-http.rule=Host(`${PORTAINER_MCP_HOSTNAME}`)"
+      - "traefik.http.routers.portainer-mcp-http.entrypoints=${TRAEFIK_ENTRYPOINT:-http}"
+      - "traefik.http.services.portainer-mcp-http.loadbalancer.server.port=8080"
+
+volumes:
+  portainer-mcp-http-tools:
+
+networks:
+  traefik-net:
+    name: ${TRAEFIK_NETWORK}
+    external: true
