@@ -40,7 +40,16 @@ services:
       - "traefik.docker.network=${TRAEFIK_NETWORK}"
       - "traefik.http.routers.portainer-mcp-http.rule=Host(`${PORTAINER_MCP_HOSTNAME}`)"
       - "traefik.http.routers.portainer-mcp-http.entrypoints=${TRAEFIK_ENTRYPOINT:-http}"
+      - "traefik.http.routers.portainer-mcp-http.middlewares=portainer-mcp-http-cors"
       - "traefik.http.services.portainer-mcp-http.loadbalancer.server.port=80"
+      # CORS middleware: mcp-auth-proxy has no built-in CORS, so Traefik handles preflight.
+      # Cloudflare AI controls dashboard (dash.cloudflare.com) performs browser fetch after OAuth.
+      - "traefik.http.middlewares.portainer-mcp-http-cors.headers.accesscontrolalloworiginlist=https://dash.cloudflare.com"
+      - "traefik.http.middlewares.portainer-mcp-http-cors.headers.accesscontrolallowmethods=GET,POST,OPTIONS,DELETE"
+      - "traefik.http.middlewares.portainer-mcp-http-cors.headers.accesscontrolallowheaders=Authorization,Content-Type,Accept,Mcp-Session-Id,Mcp-Protocol-Version"
+      - "traefik.http.middlewares.portainer-mcp-http-cors.headers.accesscontrolexposeheaders=Mcp-Session-Id"
+      - "traefik.http.middlewares.portainer-mcp-http-cors.headers.accesscontrolmaxage=600"
+      - "traefik.http.middlewares.portainer-mcp-http-cors.headers.addvaryheader=true"
 
 volumes:
   portainer-mcp-http-tools:

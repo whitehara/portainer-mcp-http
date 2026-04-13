@@ -44,6 +44,10 @@ mcp-auth-proxy acts as both:
 This means the origin (`portainer-mcp.your-domain.com`) does not need a Cloudflare Access
 self-hosted application — authentication is enforced by mcp-auth-proxy itself.
 
+Traefik also injects **CORS headers** via middleware so that the Cloudflare AI controls
+dashboard (a browser-based client) can complete its fetch after OAuth. mcp-auth-proxy
+does not handle CORS itself.
+
 ## Prerequisites
 
 - An existing Cloudflare Tunnel connected to your Traefik Docker network
@@ -100,6 +104,9 @@ docker compose logs -f portainer-mcp-http
 2. Click **Save and connect server** → **Authenticate server**
 3. Complete the OAuth popup (authenticates through Cloudflare Access)
 4. Status becomes **Ready**
+5. Open the server's detail page and add an **Access policy** allowing your identity.
+   This is separate from the SaaS app's policy — without it, users authenticate through
+   Cloudflare but the MCP Portal shows "No allowed servers available".
 
 ### 5. Add to an MCP Portal (optional but recommended)
 
@@ -149,6 +156,11 @@ First launch opens a browser window for Cloudflare Access login. Tokens are cach
 | `IMAGE_TAG` | Image tag to deploy (default: `latest`) |
 | `PORTAINER_MCP_VERSION` | *(local build only)* portainer-mcp release version |
 | `TARGETARCH` | *(local build only)* `amd64` or `arm64` |
+
+> **Portainer must be reachable over HTTPS.** portainer-mcp's upstream SDK hardcodes the
+> `https` scheme and exposes no CLI override, so pointing it at the plain HTTP port (9000)
+> will fail. If your Portainer instance only listens on HTTP, enable its HTTPS listener
+> (port 9443 is the default) or front it with a TLS-terminating reverse proxy.
 
 ## CI/CD
 
