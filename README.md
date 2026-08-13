@@ -1,5 +1,33 @@
 # portainer-mcp-http
 
+> [!IMPORTANT]
+> **Archived — reference only.** [`portainer-mcp`](https://github.com/portainer/portainer-mcp) has
+> since been rewritten (Python/FastMCP, from `2.42.x` onward) and now natively supports HTTP
+> transport, including an explicit **"identity-aware proxy" auth posture**
+> (`PORTAINER_MCP_TRUST_PROXY_AUTH=1`) designed for exactly this use case: sitting behind an
+> OAuth-terminating proxy such as `mcp-auth-proxy`. And `mcp-auth-proxy` itself already supports
+> proxying to an HTTP backend URL as-is, not just spawning a stdio subprocess.
+>
+> That means this repo's reason to exist — a custom Docker image that downloads and MD5-verifies
+> the old `portainer-mcp` Go binary and wraps it as a stdio subprocess inside `mcp-auth-proxy` — is
+> no longer needed. Run the two official images side by side instead and point `mcp-auth-proxy` at
+> `portainer-mcp`'s HTTP endpoint directly:
+>
+> - `portainer/portainer-mcp:<version>` — `--transport http` (or HTTP mode via env vars), with
+>   `PORTAINER_MCP_TRUST_PROXY_AUTH=1` (+ `PORTAINER_MCP_TRUST_PROXY_TLS=1` /
+>   `PORTAINER_MCP_FORWARDED_ALLOW_IPS`) so it trusts the proxy's already-authenticated request
+>   instead of requiring its own shared `PORTAINER_MCP_AUTH_TOKEN`.
+> - `mcp-auth-proxy`'s existing OIDC/OAuth 2.1 setup (Cloudflare Access for SaaS, etc.) unchanged,
+>   but pointed at that HTTP URL as its backend instead of a stdio command — see the
+>   [mcp-auth-proxy README](https://github.com/sigbit/mcp-auth-proxy#quickstart) ("SSE/HTTP" backend).
+> - See [`portainer-mcp`'s README](https://github.com/portainer/portainer-mcp#option-d---identity-aware-proxy-mcp-oauth)
+>   ("Option D") for the full posture rules, including per-user `X-Portainer-API-Key` forwarding,
+>   which this repo's shared single-token setup did not support.
+>
+> The rest of this README is kept for historical reference (the Cloudflare Access SaaS app setup,
+> Traefik CORS middleware labels, and general Cloudflare AI controls / MCP Portal registration
+> steps are still applicable to the new architecture — only the container packaging changes).
+
 OAuth-protected remote MCP server that wraps [portainer-mcp](https://github.com/portainer/portainer-mcp)
 with [mcp-auth-proxy](https://github.com/sigbit/mcp-auth-proxy), using **Cloudflare Access for SaaS**
 as the OIDC identity provider. Traffic flows through an existing Traefik reverse proxy and
